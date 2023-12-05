@@ -22,9 +22,11 @@ namespace Bamboo
 		std::shared_ptr<PostProcessRenderData> postprocess_render_data = std::static_pointer_cast<PostProcessRenderData>(m_render_datas.front());
 
 		// render to framebuffer
-		std::vector<VkClearValue> clear_values(2);
+		std::vector<VkClearValue> clear_values(4);
 		clear_values[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
 		clear_values[1].color = { 0.0f, 0.0f, 0.0f, 1.0f };
+		clear_values[2].color = { 0.0f, 0.0f, 0.0f, 1.0f };
+		clear_values[3].color = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 		VkRenderPassBeginInfo render_pass_bi{};
 		render_pass_bi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -52,7 +54,7 @@ namespace Bamboo
 
 		vkCmdBeginRenderPass(command_buffer, &render_pass_bi, VK_SUBPASS_CONTENTS_INLINE);
 
-		// first subpass
+		// outline/brightness subpass
 		{
 			vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelines[0]);
 
@@ -61,8 +63,8 @@ namespace Bamboo
 
 			// push constants
 			int is_selecting = postprocess_render_data->outline_texture != nullptr;
-			updatePushConstants(command_buffer, m_pipeline_layouts[0], { &is_selecting }, 
-				{ { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) } });
+			updatePushConstants(command_buffer, m_pipeline_layouts[0], { &is_selecting, &postprocess_render_data->bloom_fx_data.threshold },
+				{ { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) + sizeof(float) } });
 
 			// texture image samplers
 			addImageDescriptorSet(desc_writes, desc_image_infos[0], *postprocess_render_data->p_color_texture, 0);
@@ -75,27 +77,70 @@ namespace Bamboo
 			vkCmdDraw(command_buffer, 3, 1, 0, 0);
 		}
 
-		//second subpass
+		int blur_direction = 0;
+		//vert blur subpass
 		{
 			vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
 
 			vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelines[1]);
 
-			updatePushConstants(command_buffer, m_pipeline_layouts[1], { &postprocess_render_data->lens_data.exposure, 
-																		 &postprocess_render_data->bloom_fx_data.intensity,
-																		 &postprocess_render_data->bloom_fx_data.threshold },
-																	   { { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostprocessData) } });
+			updatePushConstants(command_buffer, m_pipeline_layouts[1], { &blur_direction },
+				{ { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) } });
 
 			std::vector<VkWriteDescriptorSet> desc_writes;
 			VkDescriptorImageInfo desc_image_info{};
 
-			addImageDescriptorSet(desc_writes, desc_image_info, m_color_outline_texture_sampler, 0);
+			m_brightness_texture_sampler.descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			addImageDescriptorSet(desc_writes, desc_image_info, m_brightness_texture_sampler, 0);
+			m_brightness_texture_sampler.descriptor_type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+
+			VulkanRHI::get().getVkCmdPushDescriptorSetKHR()(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+				m_pipeline_layouts[1], 0, static_cast<uint32_t>(desc_writes.size()), desc_writes.data());
+			vkCmdDraw(command_buffer, 3, 1, 0, 0);
+		}
+
+		blur_direction = 1;
+		// horz blur pass
+		{
+			vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
+
+			vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelines[2]);
+
+			updatePushConstants(command_buffer, m_pipeline_layouts[1], { &blur_direction },
+				{ { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) } });
+
+			std::vector<VkWriteDescriptorSet> desc_writes;
+			VkDescriptorImageInfo desc_image_info{};
+
+			m_blur_texture_sampler.descriptor_type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			addImageDescriptorSet(desc_writes, desc_image_info, m_blur_texture_sampler, 0);
+			m_blur_texture_sampler.descriptor_type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
 
 			VulkanRHI::get().getVkCmdPushDescriptorSetKHR()(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 				m_pipeline_layouts[1], 0, static_cast<uint32_t>(desc_writes.size()), desc_writes.data());
 			vkCmdDraw(command_buffer, 3, 1, 0, 0);
 		}
 		
+		//combine subpass
+		{
+			vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
+
+			vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelines[3]);
+
+			int effect_on = (int)postprocess_render_data->bloom_fx_data.effect_on;
+			updatePushConstants(command_buffer, m_pipeline_layouts[2], { &effect_on, &postprocess_render_data->lens_data.exposure },
+				{ { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) + sizeof(float) } });
+
+			std::vector<VkWriteDescriptorSet> desc_writes;
+			VkDescriptorImageInfo desc_image_info{};
+
+			addImageDescriptorSet(desc_writes, desc_image_info, m_brightness_texture_sampler, 0);
+			addImageDescriptorSet(desc_writes, desc_image_info, m_color_outline_texture_sampler, 1);
+
+			VulkanRHI::get().getVkCmdPushDescriptorSetKHR()(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+				m_pipeline_layouts[2], 0, static_cast<uint32_t>(desc_writes.size()), desc_writes.data());
+			vkCmdDraw(command_buffer, 3, 1, 0, 0);
+		}
 
 		vkCmdEndRenderPass(command_buffer);
 	}
@@ -109,43 +154,63 @@ namespace Bamboo
 
 	void PostprocessPass::createRenderPass()
 	{
-		std::vector<VkAttachmentDescription> attachments(2);
-		attachments[0].format = m_format;
-		attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		/********
+		* index 0: final attachment
+		*		1: brightness/horz blur attachment
+		*		2: outline attachment
+		*		3: vert blur attachment
+		*********/
+		std::vector<VkAttachmentDescription> attachments(4);
+		for (size_t i = 0; i < 4; ++i)
+		{
+			attachments[i].format = m_format;
+			attachments[i].samples = VK_SAMPLE_COUNT_1_BIT;
+			attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+			attachments[i].storeOp = i == 0 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			attachments[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			attachments[i].finalLayout = i == 0 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		}
 
-		attachments[1].format = m_format;
-		attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-		attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		attachments[1].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-		std::vector<VkAttachmentReference> references = {
+		std::vector<VkAttachmentReference> references =
+		{
 			{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-			{ 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
+			{ 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
+			{ 2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
+			{ 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
 		};
 
-		VkAttachmentReference input_reference = { 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		std::vector<VkAttachmentReference> input_references =
+		{
+			{ 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		};
 
-		// subpass
-		std::vector<VkSubpassDescription> subpass_descs(2);
+		/*******
+		* subpass 0: brightness/outline stage
+		*		  1: vertical blur stage
+		*		  2: horizonal blur stage
+		*		  3: combine stage
+		********/
+		std::vector<VkSubpassDescription> subpass_descs(4);
 		subpass_descs[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass_descs[0].colorAttachmentCount = 1;
+		subpass_descs[0].colorAttachmentCount = 2;
 		subpass_descs[0].pColorAttachments = &references[1];
-
+		
 		subpass_descs[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass_descs[1].inputAttachmentCount = 1;
-		subpass_descs[1].pInputAttachments = &input_reference;
 		subpass_descs[1].colorAttachmentCount = 1;
-		subpass_descs[1].pColorAttachments = &references[0];
+		subpass_descs[1].pColorAttachments = &references[3];
+
+		subpass_descs[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass_descs[2].colorAttachmentCount = 1;
+		subpass_descs[2].pColorAttachments = &references[1];
+
+		subpass_descs[3].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass_descs[3].colorAttachmentCount = 1;
+		subpass_descs[3].pColorAttachments = &references[0];
+		subpass_descs[3].inputAttachmentCount = 2;
+		subpass_descs[3].pInputAttachments = &input_references[0];
 
 		// subpass dependencies
 		std::vector<VkSubpassDependency> dependencies =
@@ -168,15 +233,24 @@ namespace Bamboo
 				VK_ACCESS_SHADER_READ_BIT,
 				VK_DEPENDENCY_BY_REGION_BIT,
 			},
-			//{
-			//	1,
-			//	VK_SUBPASS_EXTERNAL,
-			//	VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-			//	VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-			//	VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-			//	VK_ACCESS_SHADER_READ_BIT,
-			//	0
-			//},
+			{
+				1,
+				2,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_ACCESS_SHADER_READ_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT
+			},
+			{
+				2,
+				3,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_ACCESS_SHADER_READ_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT
+			},
 		};
 
 		// create render pass
@@ -195,9 +269,9 @@ namespace Bamboo
 
 	void PostprocessPass::createDescriptorSetLayouts()
 	{
-		m_desc_set_layouts.resize(2);
+		m_desc_set_layouts.resize(3);
 
-		// outline colorgrading descriptorset
+		// outline colorgrading/ brightness descriptorset
 		VkDescriptorSetLayoutCreateInfo desc_set_layout_ci{};
 		desc_set_layout_ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		desc_set_layout_ci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
@@ -207,60 +281,78 @@ namespace Bamboo
 			{1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
 			{2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
 		};
-
 		desc_set_layout_ci.bindingCount = static_cast<uint32_t>(desc_set_layout_bindings.size());
 		desc_set_layout_ci.pBindings = desc_set_layout_bindings.data();
 		VkResult result = vkCreateDescriptorSetLayout(VulkanRHI::get().getDevice(), &desc_set_layout_ci, nullptr, &m_desc_set_layouts[0]);
 		CHECK_VULKAN_RESULT(result, "create postprocess descriptor set layout");
 
-		// bloomfx descriptor set
+		// blur descriptor set
 		desc_set_layout_bindings = {
-			{0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}
+			{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}
 		};
-
 		desc_set_layout_ci.bindingCount = static_cast<uint32_t>(desc_set_layout_bindings.size());
 		desc_set_layout_ci.pBindings = desc_set_layout_bindings.data();
 		result = vkCreateDescriptorSetLayout(VulkanRHI::get().getDevice(), &desc_set_layout_ci, nullptr, &m_desc_set_layouts[1]);
+		CHECK_VULKAN_RESULT(result, "create postprocess descriptor set layout");
+
+		// combine descriptor set
+		desc_set_layout_bindings = {
+			{0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+			{1, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}
+		};
+		desc_set_layout_ci.bindingCount = static_cast<uint32_t>(desc_set_layout_bindings.size());
+		desc_set_layout_ci.pBindings = desc_set_layout_bindings.data();
+		result = vkCreateDescriptorSetLayout(VulkanRHI::get().getDevice(), &desc_set_layout_ci, nullptr, &m_desc_set_layouts[2]);
 		CHECK_VULKAN_RESULT(result, "create postprocess descriptor set layout");
 	}
 
 	void PostprocessPass::createPipelineLayouts()
 	{
-		m_push_constant_ranges =
-		{
-			{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) }
-		};
-
-		m_pipeline_layouts.resize(2);
+		m_pipeline_layouts.resize(3);
 
 		VkPipelineLayoutCreateInfo pipeline_layout_ci{};
 		pipeline_layout_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+		// outline colorgrading/ brightness pipeline layout
+		m_push_constant_ranges =
+		{
+			{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) + sizeof(float) }
+		};
 		pipeline_layout_ci.setLayoutCount = 1;
 		pipeline_layout_ci.pSetLayouts = &m_desc_set_layouts[0];
 		pipeline_layout_ci.pushConstantRangeCount = static_cast<uint32_t>(m_push_constant_ranges.size());
 		pipeline_layout_ci.pPushConstantRanges = m_push_constant_ranges.data();
-
 		VkResult result = vkCreatePipelineLayout(VulkanRHI::get().getDevice(), &pipeline_layout_ci, nullptr, &m_pipeline_layouts[0]);
 		CHECK_VULKAN_RESULT(result, "create postprocess pipeline layout");
 
+		// blur pipeline layout
 		m_push_constant_ranges =
 		{
-			{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostprocessData) }
+			{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) }
 		};
-
 		pipeline_layout_ci.pushConstantRangeCount = static_cast<uint32_t>(m_push_constant_ranges.size());
 		pipeline_layout_ci.pPushConstantRanges = m_push_constant_ranges.data();
 		pipeline_layout_ci.setLayoutCount = 1;
 		pipeline_layout_ci.pSetLayouts = &m_desc_set_layouts[1];
-
-
 		result = vkCreatePipelineLayout(VulkanRHI::get().getDevice(), &pipeline_layout_ci, nullptr, &m_pipeline_layouts[1]);
+		CHECK_VULKAN_RESULT(result, "create postprocess pipeline layout");
+
+		// combine pipeline layout
+		m_push_constant_ranges =
+		{
+			{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int) + sizeof(float) }
+		};
+		pipeline_layout_ci.pushConstantRangeCount = static_cast<uint32_t>(m_push_constant_ranges.size());
+		pipeline_layout_ci.pPushConstantRanges = m_push_constant_ranges.data();
+		pipeline_layout_ci.setLayoutCount = 1;
+		pipeline_layout_ci.pSetLayouts = &m_desc_set_layouts[2];
+		result = vkCreatePipelineLayout(VulkanRHI::get().getDevice(), &pipeline_layout_ci, nullptr, &m_pipeline_layouts[2]);
 		CHECK_VULKAN_RESULT(result, "create postprocess pipeline layout");
 	}
 
 	void PostprocessPass::createPipelines()
 	{
-		m_pipelines.resize(2);
+		m_pipelines.resize(4);
 
 		// disable culling and depth testing
 		m_rasterize_state_ci.cullMode = VK_CULL_MODE_NONE;
@@ -268,16 +360,24 @@ namespace Bamboo
 		m_depth_stencil_ci.depthWriteEnable = VK_FALSE;
 		m_color_blend_attachments[0].blendEnable = VK_FALSE;
 
+		// color blend
+		m_color_blend_attachments.push_back(m_color_blend_attachments.front());
+
 		// vertex input state
 		VkPipelineVertexInputStateCreateInfo vertex_input_ci{};
 		vertex_input_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
 		// shader stages
 		const auto& shader_manager = g_engine.shaderManager();
+
+		// outline colorgrading/ brightness pipeline
 		std::vector<VkPipelineShaderStageCreateInfo> shader_stage_cis = {
 			shader_manager->getShaderStageCI("screen.vert", VK_SHADER_STAGE_VERTEX_BIT),
 			shader_manager->getShaderStageCI("outline_color_grading.frag", VK_SHADER_STAGE_FRAGMENT_BIT)
 		};
+
+		m_color_blend_ci.attachmentCount = static_cast<uint32_t>(m_color_blend_attachments.size());
+		m_color_blend_ci.pAttachments = m_color_blend_attachments.data();
 
 		m_pipeline_ci.renderPass = m_render_pass;
 		m_pipeline_ci.pVertexInputState = &vertex_input_ci;
@@ -289,16 +389,35 @@ namespace Bamboo
 		VkResult result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[0]);
 		CHECK_VULKAN_RESULT(result, "create postprocess graphics pipeline");
 
+		// blur pipeline
 		shader_stage_cis = {
 			shader_manager->getShaderStageCI("screen.vert", VK_SHADER_STAGE_VERTEX_BIT),
-			shader_manager->getShaderStageCI("bloom.frag", VK_SHADER_STAGE_FRAGMENT_BIT)
+			shader_manager->getShaderStageCI("bloom_blur.frag", VK_SHADER_STAGE_FRAGMENT_BIT)
 		};
+
+		m_color_blend_ci.attachmentCount = 1;
+
 		m_pipeline_ci.layout = m_pipeline_layouts[1];
 		m_pipeline_ci.stageCount = static_cast<uint32_t>(shader_stage_cis.size());
 		m_pipeline_ci.pStages = shader_stage_cis.data();
 		m_pipeline_ci.subpass = 1;
-
 		result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[1]);
+		CHECK_VULKAN_RESULT(result, "create postprocess graphics pipeline");
+
+		m_pipeline_ci.subpass = 2;
+		result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[2]);
+		CHECK_VULKAN_RESULT(result, "create postprocess graphics pipeline");
+
+		// combine pipeline
+		shader_stage_cis = {
+			shader_manager->getShaderStageCI("screen.vert", VK_SHADER_STAGE_VERTEX_BIT),
+			shader_manager->getShaderStageCI("postprocess_combine.frag", VK_SHADER_STAGE_FRAGMENT_BIT)
+		};
+		m_pipeline_ci.layout = m_pipeline_layouts[2];
+		m_pipeline_ci.stageCount = static_cast<uint32_t>(shader_stage_cis.size());
+		m_pipeline_ci.pStages = shader_stage_cis.data();
+		m_pipeline_ci.subpass = 3;
+		result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[3]);
 		CHECK_VULKAN_RESULT(result, "create postprocess graphics pipeline");
 	}
 
@@ -308,15 +427,22 @@ namespace Bamboo
 		VulkanUtil::createImageViewSampler(m_width, m_height, nullptr, 1, 1, m_format,
 			VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, m_color_texture_sampler,
 			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-
 		VulkanUtil::createImageViewSampler(m_width, m_height, nullptr, 1, 1, m_format,
 			VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, m_color_outline_texture_sampler,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+		VulkanUtil::createImageViewSampler(m_width, m_height, nullptr, 1, 1, m_format,
+			VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, m_brightness_texture_sampler,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+		VulkanUtil::createImageViewSampler(m_width, m_height, nullptr, 1, 1, m_format,
+			VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, m_blur_texture_sampler,
 			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
 
 		std::vector<VkImageView> attachments =
 		{
 			m_color_texture_sampler.view,
-			m_color_outline_texture_sampler.view
+			m_brightness_texture_sampler.view,
+			m_color_outline_texture_sampler.view,
+			m_blur_texture_sampler.view
 		};
 
 		// 2.create framebuffer
@@ -337,6 +463,8 @@ namespace Bamboo
 	{
 		m_color_texture_sampler.destroy();
 		m_color_outline_texture_sampler.destroy();
+		m_brightness_texture_sampler.destroy();
+		m_blur_texture_sampler.destroy();
 
 		RenderPass::destroyResizableObjects();
 	}

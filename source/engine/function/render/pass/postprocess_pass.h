@@ -29,6 +29,8 @@ namespace Bamboo
 		VmaImageViewSampler m_color_texture_sampler;
 		VmaImageViewSampler m_color_grading_texture_sampler;
 		VmaImageViewSampler m_color_outline_texture_sampler;
+		VmaImageViewSampler m_brightness_texture_sampler;
+		VmaImageViewSampler m_blur_texture_sampler;
 
 		struct PostprocessData
 		{

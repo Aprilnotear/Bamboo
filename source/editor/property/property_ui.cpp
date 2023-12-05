@@ -143,6 +143,10 @@ namespace Bamboo
 				ASSERT(property_type.second != EPropertyContainerType::Map, "don't support map container property type now");
 
 				rttr::variant& variant = prop.get_value(instance);
+				if (property_type.first == EPropertyValueType::Asset)
+				{
+					
+				}
 				if (property_type.second == EPropertyContainerType::Mono)
 				{
 					m_property_constructors[property_type.first](prop_name, variant);

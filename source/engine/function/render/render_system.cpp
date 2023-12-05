@@ -456,6 +456,7 @@ namespace Bamboo
 			{
 				postprocess_render_data->bloom_fx_data.intensity = bloom_fx_component->m_intensity;
 				postprocess_render_data->bloom_fx_data.threshold = bloom_fx_component->m_threshold;
+				postprocess_render_data->bloom_fx_data.effect_on = bloom_fx_component->bloom_fx_on;
 			}
 		}
 
@@ -481,7 +482,7 @@ namespace Bamboo
 		{
 			m_point_light_shadow_pass->updateCubes(shadow_cube_cis);
 			const auto& point_light_shadow_textures = m_point_light_shadow_pass->getShadowImageViewSamplers();
-			for (size_t i = 0; i < point_light_shadow_textures.size(); ++i)
+			for (size_t i = 0; i < lighting_ubo.point_light_num; ++i)
 			{
 				lighting_render_data->point_light_shadow_textures[i] = point_light_shadow_textures[i];
 			}
@@ -507,7 +508,7 @@ namespace Bamboo
 		{
 			m_spot_light_shadow_pass->updateFrustums(shadow_frustum_cis);
 			const auto& spot_light_shadow_textures = m_spot_light_shadow_pass->getShadowImageViewSamplers();
-			for (size_t i = 0; i < spot_light_shadow_textures.size(); ++i)
+			for (size_t i = 0; i < lighting_ubo.spot_light_num; ++i)
 			{
 				lighting_render_data->spot_light_shadow_textures[i] = spot_light_shadow_textures[i];
 			}

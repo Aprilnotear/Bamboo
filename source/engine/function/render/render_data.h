@@ -100,6 +100,7 @@ namespace Bamboo
 		{
 			float intensity;
 			float threshold;
+			bool effect_on;
 		} bloom_fx_data;
 	};
 

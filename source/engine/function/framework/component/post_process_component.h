@@ -23,6 +23,7 @@ namespace Bamboo
 
 		float m_intensity;
 		float m_threshold;
+		bool bloom_fx_on;
 	private:
 		REGISTER_REFLECTION(PostprocessComponent)
 
@@ -32,6 +33,7 @@ namespace Bamboo
 			ar(cereal::make_nvp("bloom_fx_component", cereal::base_class<BloomFXComponent>(this)));
 			ar(cereal::make_nvp("intensity", m_intensity));
 			ar(cereal::make_nvp("threshold", m_threshold));
+			ar(cereal::make_nvp("bloomFx", bloom_fx_on));
 		}
 	};
 }

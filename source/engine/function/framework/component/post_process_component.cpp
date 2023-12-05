@@ -4,7 +4,8 @@ RTTR_REGISTRATION
 {
 rttr::registration::class_<Bamboo::BloomFXComponent>("BloomFXComponent")
 	.property("intensity", &Bamboo::BloomFXComponent::m_intensity)
-	.property("threshold", &Bamboo::BloomFXComponent::m_threshold);
+	.property("threshold", &Bamboo::BloomFXComponent::m_threshold)
+	.property("bloomFx", &Bamboo::BloomFXComponent::bloom_fx_on);
 }
 
 CEREAL_REGISTER_TYPE(Bamboo::PostprocessComponent)
@@ -23,5 +24,6 @@ namespace Bamboo
 	{
 		m_intensity = 1.0f;
 		m_threshold = -1.0f;
+		bloom_fx_on = false;
 	}
 }
