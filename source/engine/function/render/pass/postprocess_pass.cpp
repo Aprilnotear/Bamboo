@@ -166,11 +166,11 @@ namespace Bamboo
 			attachments[i].format = m_format;
 			attachments[i].samples = VK_SAMPLE_COUNT_1_BIT;
 			attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-			attachments[i].storeOp = i == 0 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 			attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 			attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 			attachments[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			attachments[i].finalLayout = i == 0 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			attachments[i].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		}
 
 		std::vector<VkAttachmentReference> references =
@@ -198,9 +198,15 @@ namespace Bamboo
 		subpass_descs[0].colorAttachmentCount = 2;
 		subpass_descs[0].pColorAttachments = &references[1];
 		
+		std::vector<VkAttachmentReference> test_ref =
+		{
+			{ 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
+		};
+
 		subpass_descs[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass_descs[1].colorAttachmentCount = 1;
-		subpass_descs[1].pColorAttachments = &references[3];
+		subpass_descs[1].colorAttachmentCount = 2;
+		subpass_descs[1].pColorAttachments = &test_ref[0];
 
 		subpass_descs[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpass_descs[2].colorAttachmentCount = 1;
@@ -236,11 +242,11 @@ namespace Bamboo
 			{
 				1,
 				2,
-				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-				VK_ACCESS_SHADER_READ_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-				VK_DEPENDENCY_BY_REGION_BIT
+				VK_ACCESS_SHADER_READ_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT,
 			},
 			{
 				2,
@@ -248,8 +254,17 @@ namespace Bamboo
 				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_ACCESS_INPUT_ATTACHMENT_READ_BIT,
+				VK_DEPENDENCY_BY_REGION_BIT,
+			},
+			{
+				3,
+				VK_SUBPASS_EXTERNAL,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
 				VK_ACCESS_SHADER_READ_BIT,
-				VK_DEPENDENCY_BY_REGION_BIT
+				VK_DEPENDENCY_BY_REGION_BIT,
 			},
 		};
 
@@ -395,7 +410,7 @@ namespace Bamboo
 			shader_manager->getShaderStageCI("bloom_blur.frag", VK_SHADER_STAGE_FRAGMENT_BIT)
 		};
 
-		m_color_blend_ci.attachmentCount = 1;
+		//m_color_blend_ci.attachmentCount = 1;
 
 		m_pipeline_ci.layout = m_pipeline_layouts[1];
 		m_pipeline_ci.stageCount = static_cast<uint32_t>(shader_stage_cis.size());
@@ -403,6 +418,8 @@ namespace Bamboo
 		m_pipeline_ci.subpass = 1;
 		result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[1]);
 		CHECK_VULKAN_RESULT(result, "create postprocess graphics pipeline");
+		
+		m_color_blend_ci.attachmentCount = 1;
 
 		m_pipeline_ci.subpass = 2;
 		result = vkCreateGraphicsPipelines(VulkanRHI::get().getDevice(), m_pipeline_cache, 1, &m_pipeline_ci, nullptr, &m_pipelines[2]);
